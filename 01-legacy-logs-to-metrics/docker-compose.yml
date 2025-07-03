@@ -1,0 +1,76 @@
+networks:
+  demo:
+
+volumes:
+  demo_data: {}
+  grafana_data: {}
+  loki_data: {}
+
+services:
+  loggen:
+    image: python:3.13-slim
+    container_name: loggen
+    working_dir: /app
+    volumes:
+      - demo_data:/var/log/loggen
+      - ./loggen:/app
+    command: python loggen.py /var/log/loggen/loggen.log
+    restart: unless-stopped
+    networks:
+      - demo
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    volumes:
+      - demo_data:/var/log/loggen
+      - "./promtail:/config"
+    command: -config.file=/config/promtail.yml
+    networks:
+      - demo
+
+  grafana:
+    image: grafana/grafana:latest
+    pull_policy: always
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    restart: unless-stopped
+    expose:
+      - 3000
+    networks:
+      - demo
+
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki:/etc/loki
+      - loki_data:/loki
+    command: -config.file=/etc/loki/loki.yml -server.http-listen-port=3100
+    expose:
+      - 3100
+    networks:
+      - demo
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    ports:
+      - 9090:9090
+    command: --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus --web.console.libraries=/usr/share/prometheus/console_libraries --web.console.templates=/usr/share/prometheus/consoles --web.enable-remote-write-receiver
+    expose:
+      - 9090
+    networks:
+      - demo

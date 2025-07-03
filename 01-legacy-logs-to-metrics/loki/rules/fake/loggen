@@ -1,0 +1,14 @@
+groups:
+  - name: loggen
+    interval: 30s
+    rules:
+      - record: loggen:failed_jobs
+        expr: |
+          max(
+            last_over_time(
+              {job="loggen"} |~ "JOBS"
+              | regexp "failed=(?P<failed_jobs>\\d+)"
+              | label_format failed_jobs="{{.failed_jobs}}"
+              | unwrap failed_jobs [1m]
+            )
+          ) by (service_name)
