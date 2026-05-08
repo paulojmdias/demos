@@ -1,0 +1,12 @@
+{
+  "resource": "http://localhost:8080",
+  "authorization_servers": [
+    "http://localhost:5556"
+  ],
+  "scopes_supported": [
+    "openid",
+    "profile",
+    "email"
+  ],
+  "bearer_methods_supported": ["header"]
+}

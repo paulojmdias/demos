@@ -1,0 +1,174 @@
+---
+# Grafana MCP — Option B: mcp-auth-proxy + Dex + Grafana (JWT forwarding)
+#
+# Auth flow:
+#   MCP Client ──OAuth PKCE──► mcp-auth-proxy :8082
+#   mcp-auth-proxy ──OIDC code flow──► Dex :5556
+#   mcp-auth-proxy issues its own session JWT (signed with internal RSA key)
+#   MCP Client ──Bearer session JWT──► mcp-auth-proxy :8082
+#   mcp-auth-proxy (PROXY_FORWARD_AUTHORIZATION=true) ──JWT──► mcp-grafana :8000
+#   mcp-grafana (GRAFANA_FORWARD_HEADERS=Authorization) ──JWT──► Grafana :3000
+#   Grafana auth.jwt validates JWT against mcp-auth-proxy JWKS
+#
+# Grafana identity: per-user (each Dex user maps to a real Grafana account)
+# Compared to Option A: richer identity, but mcp-auth-proxy is stateful
+#
+# NOTE: auto_sign_up = true here for local E2E convenience.
+# In production, auto_sign_up = false — users must first log in via
+# browser SSO before the JWT path will work.
+
+services:
+
+  # ── 1. Dex ───────────────────────────────────────────────────────────────────
+  # Local OIDC provider. mcp-auth-proxy performs the OIDC code flow against Dex.
+  # Production swap: point OIDC_CONFIGURATION_URL at your OIDC provider.
+  dex:
+    image: dexidp/dex:v2.45.1
+    container_name: mcp-dex
+    restart: unless-stopped
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./dex-config.yaml:/etc/dex/config.yaml:ro
+    ports:
+      - "5556:5556"
+    networks:
+      - mcp-net
+
+  # ── 2. mcp-auth-proxy ────────────────────────────────────────────────────────
+  # Handles the OIDC login flow, issues session JWTs signed with its own RSA key,
+  # and forwards the session JWT downstream via Authorization header.
+  # Grafana validates these JWTs against mcp-auth-proxy's /.well-known/jwks.json.
+  mcp-auth-proxy:
+    image: ghcr.io/sigbit/mcp-auth-proxy:v2.10.1
+    container_name: mcp-auth-proxy
+    restart: unless-stopped
+    command:
+      - --external-url=http://localhost:8082
+      - --no-auto-tls
+      - http://mcp-grafana:8000 # backend — proxy appends client path (/mcp)
+    ports:
+      - "8082:80" # proxy listens on :80 internally
+    environment:
+      # Dex issuer is http://localhost:5556 (what the browser sees).
+      # Containers reach it via host.docker.internal:5556 (Docker Desktop on Mac/Windows)
+      # or via the dex service name. We fetch the discovery doc via the service name
+      # but the discovered URLs (token, userinfo) will contain localhost:5556 —
+      # those are rewritten by setting OIDC_CONFIGURATION_URL to the internal address
+      # and extra_hosts maps host.docker.internal so localhost resolves inside the container.
+      OIDC_CONFIGURATION_URL: "http://dex:5556/.well-known/openid-configuration"
+      OIDC_ISSUER_URL: "http://localhost:5556" # must match Dex issuer claim
+      OIDC_CLIENT_ID: "mcp-auth-proxy"
+      OIDC_CLIENT_SECRET: "mcp-auth-proxy-secret"
+      OIDC_ALLOWED_USERS_GLOB: "*" # allow any authenticated Dex user
+      PROXY_FORWARD_AUTHORIZATION: "true" # forward session JWT to mcp-grafana
+      REPOSITORY_BACKEND: "local" # in-memory session store (no DB)
+    # Map localhost → host gateway so token/userinfo calls from inside the container
+    # reach Dex on the host-published port 5556 (same URLs the browser uses)
+    extra_hosts:
+      - "localhost:host-gateway"
+    depends_on:
+      - dex
+      - mcp-grafana
+    networks:
+      - mcp-net
+
+  # ── 3. mcp-grafana ───────────────────────────────────────────────────────────
+  # MCP server. No SA token — receives session JWT via Authorization header
+  # from mcp-auth-proxy and forwards it to Grafana.
+  mcp-grafana:
+    image: grafana/mcp-grafana:0.14.0
+    container_name: mcp-grafana
+    restart: unless-stopped
+    command:
+      - --transport=streamable-http
+      - --address=0.0.0.0:8000
+      - --endpoint-path=/mcp
+      - --disable-write
+      - --debug
+      - --log-level=debug
+    environment:
+      GRAFANA_URL: http://grafana:3000
+      GRAFANA_FORWARD_HEADERS: "Authorization" # forward JWT — no SA token
+    expose:
+      - "8000"
+    depends_on:
+      grafana:
+        condition: service_healthy
+    networks:
+      - mcp-net
+
+  # ── 4. Grafana ───────────────────────────────────────────────────────────────
+  # auth.jwt validates incoming Bearer tokens against mcp-auth-proxy's JWKS.
+  # auto_sign_up = true for local E2E — set to false in production.
+  grafana:
+    image: grafana/grafana:13.0.1
+    container_name: mcp-grafana-server
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      # JWT auth — validate tokens issued by mcp-auth-proxy
+      GF_AUTH_JWT_ENABLED: "true"
+      GF_AUTH_JWT_HEADER_NAME: "Authorization"
+      GF_AUTH_JWT_HEADER_VALUE_PREFIX: "Bearer"
+      GF_AUTH_JWT_JWK_SET_URL: "http://mcp-auth-proxy:80/.well-known/jwks.json"
+      GF_AUTH_JWT_EMAIL_CLAIM: "sub"
+      GF_AUTH_JWT_USERNAME_CLAIM: "sub"
+      GF_AUTH_JWT_EMAIL_ATTRIBUTE_PATH: "userinfo.email"
+      # true here for local convenience — set to false in production
+      # (requires users to exist in Grafana before the JWT path works)
+      GF_AUTH_JWT_AUTO_SIGN_UP: "true"
+      # Allow http:// JWKS URL — Grafana requires https unless app_mode=development
+      GF_DEFAULT_APP_MODE: "development"
+      # Generic OAuth — "Sign in with Dex" button on Grafana login page.
+      # To use a different OIDC provider: swap the AUTH/TOKEN/API URLs below.
+      GF_AUTH_GENERIC_OAUTH_ENABLED: "true"
+      GF_AUTH_GENERIC_OAUTH_NAME: "Dex"
+      GF_AUTH_GENERIC_OAUTH_CLIENT_ID: "grafana"
+      GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: "grafana-dex-secret"
+      GF_AUTH_GENERIC_OAUTH_SCOPES: "openid profile email"
+      GF_AUTH_GENERIC_OAUTH_AUTH_URL: "http://localhost:5556/auth"
+      GF_AUTH_GENERIC_OAUTH_TOKEN_URL: "http://dex:5556/token"
+      GF_AUTH_GENERIC_OAUTH_API_URL: "http://dex:5556/userinfo"
+      GF_AUTH_GENERIC_OAUTH_EMAIL_ATTRIBUTE_PATH: "email"
+      GF_AUTH_GENERIC_OAUTH_LOGIN_ATTRIBUTE_PATH: "email"
+      GF_AUTH_GENERIC_OAUTH_NAME_ATTRIBUTE_PATH: "name"
+      GF_AUTH_GENERIC_OAUTH_AUTO_LOGIN: "false"
+      GF_AUTH_GENERIC_OAUTH_AUTO_SIGN_UP: "true"
+      GF_AUTH_GENERIC_OAUTH_USE_PKCE: "true"
+    volumes:
+      - ./grafana-provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - mcp-net
+
+  # ── 5. Prometheus ─────────────────────────────────────────────────────────────
+  # Local Prometheus scraping itself. Provides real metric data for MCP tool demos.
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: mcp-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=1d
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    expose:
+      - "9090"
+    networks:
+      - mcp-net
+
+volumes:
+  grafana-data:
+
+networks:
+  mcp-net:
+    driver: bridge

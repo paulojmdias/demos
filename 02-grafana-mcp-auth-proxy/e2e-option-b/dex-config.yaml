@@ -1,0 +1,49 @@
+# Dex OIDC provider — Option B (mcp-auth-proxy + Dex + Grafana JWT forwarding)
+#
+# Issuer MUST be reachable by:
+#   - the browser redirect (http://localhost:5556)
+#   - mcp-auth-proxy inside Docker (http://dex:5556/.well-known/openid-configuration)
+# mcp-auth-proxy fetches the OIDC config using the Docker service name 'dex',
+# so we override the issuer URL via OIDC_ISSUER_URL env var in docker-compose.
+
+issuer: http://localhost:5556
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+logger:
+  level: info
+  format: text
+
+oauth2:
+  skipApprovalScreen: true
+  responseTypes:
+    - code
+
+# Web app clients — secrets held server-side
+staticClients:
+  # mcp-auth-proxy: handles MCP client authentication
+  - id: mcp-auth-proxy
+    name: MCP Auth Proxy
+    secret: "mcp-auth-proxy-secret"
+    redirectURIs:
+      - http://localhost:8082/.auth/oidc/callback
+
+  # grafana: allows direct "Sign in with Dex" on Grafana UI
+  - id: grafana
+    name: Grafana
+    secret: "grafana-dex-secret"
+    redirectURIs:
+      - http://localhost:3000/login/generic_oauth
+
+staticPasswords:
+  - email: user@example.com
+    # bcrypt hash of "password" (cost 10)
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    username: user
+    userID: "user-001"
+
+enablePasswordDB: true

@@ -1,0 +1,50 @@
+# Dex OIDC provider — Option A (Envoy + Dex + Grafana SA token)
+#
+# Issuer MUST be reachable by both:
+#   - the MCP client browser (http://localhost:5556)
+#   - Envoy inside Docker (fetches JWKS from http://dex:5556/keys)
+# Envoy validates the 'iss' claim as http://localhost:5556 regardless of
+# which host it uses to fetch the JWKS — these two are configured separately.
+
+issuer: http://localhost:5556
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+logger:
+  level: info
+  format: text
+
+oauth2:
+  skipApprovalScreen: true
+  responseTypes:
+    - code
+
+staticClients:
+  # Native/public app — no secret, PKCE required.
+  # Redirect URI must match what the MCP client sends exactly.
+  - id: mcp-client
+    name: MCP Client
+    public: true
+    redirectURIs:
+      - http://127.0.0.1:19876/mcp/oauth/callback
+      - http://localhost:19876/mcp/oauth/callback
+
+  # Web app client for Grafana UI "Sign in with Dex" button.
+  - id: grafana
+    name: Grafana
+    secret: "grafana-dex-secret"
+    redirectURIs:
+      - http://localhost:3000/login/generic_oauth
+
+staticPasswords:
+  - email: user@example.com
+    # bcrypt hash of "password" (cost 10)
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
+    username: user
+    userID: "user-001"
+
+enablePasswordDB: true
