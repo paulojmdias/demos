@@ -27,7 +27,7 @@ These two stacks show two different answers to that question.
 
 ## Option A — Envoy gateway, Native PKCE client
 
-**`e2e-option-a/`**
+**`gateway-native-pkce/`**
 
 ```
 MCP Client ──PKCE (client_id, no secret)──► Dex :5556
@@ -58,13 +58,13 @@ MCP Client ──Bearer JWT──► Envoy :8080
 - Register a Native App in your OIDC provider and distribute the `client_id`
   to MCP client users
 
-→ **[e2e-option-a/README.md](./e2e-option-a/README.md)**
+→ **[gateway-native-pkce/README.md](./gateway-native-pkce/README.md)**
 
 ---
 
 ## Option B — mcp-auth-proxy, Confidential Web App client
 
-**`e2e-option-b/`**
+**`auth-proxy/`**
 
 ```
 MCP Client ──OAuth (no client_id needed)──► mcp-auth-proxy :8082
@@ -95,7 +95,7 @@ MCP Client ──OAuth (no client_id needed)──► mcp-auth-proxy :8082
   (`REPOSITORY_BACKEND=postgres` or `mysql`)
 - No `client_id` distribution needed — one registration, all users
 
-→ **[e2e-option-b/README.md](./e2e-option-b/README.md)**
+→ **[auth-proxy/README.md](./auth-proxy/README.md)**
 
 ---
 
@@ -124,11 +124,11 @@ Both stacks are zero-dependency — just Docker and Docker Compose v2.
 
 ```bash
 # Option A
-cd e2e-option-a
+cd gateway-native-pkce
 docker compose up -d
 
 # Option B
-cd e2e-option-b
+cd auth-proxy
 docker compose up -d
 ```
 
